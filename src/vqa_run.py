@@ -90,9 +90,9 @@ def main():
                 "Constructing the output grid" involves picking the height and width of the output grid, then filling each 
                 cell in the grid with a symbol (integer between 0 and 9, which are visualized as colors). Only exact solutions 
                 (all cells match the expected answer) can be said to be correct. Please output an array representing the output grid.
-                If you are able to generate images, output an image visualization of the grid.
-
-                The array representation for all input and output grids: """
+                If you are able to generate images, output an image visualization of the grid."""
+    
+    print("Processing time")
     
     # Process the images
     process_images(model, tokenizer, input_path, output_path, query)
@@ -104,5 +104,11 @@ if __name__ == "__main__":
     main()
 
 
+# python vqa_run.py --input training --type visual-qa --model internlm/internlm-xcomposer2d5-7b
+# python vqa_run.py --input training --type visual-qa --model openbmb/MiniCPM-V
+# python vqa_run.py --input training --type visual-qa --model Salesforce/blip2-opt-2.7b
+# python vqa_run.py --input training --type visual-qa --model OpenGVLab/InternVL2-1B
+# python vqa_run.py --input training --type visual-qa --model antphb/Vinqw-1B-v1
+# python vqa_run.py --input training --type visual-qa --model mPLUG/mPLUG-Owl3-1B-241014
+ 
 
-# python run.py --input training --type visual-qa --model internlm/internlm-xcomposer2d5-7b
