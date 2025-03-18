@@ -1,0 +1,14 @@
+Image: ../img_data/training/2abd087.png
+
+Response:
+To construct the final output grid by picking the height and width of the input grid such that the final empty grid is black and contain symbols (integer values between 0 and 9), only exact solutions are correct.
+
+1. First, ensure that the black box contains 0.
+2. Second, pick a height of 2, meaning the total height becomes 4 (excluding 0).
+3. Third, pick a width of 2 (excluding 0), creating a total width of 4 when all cells are filled.
+
+Final output grid:
+Top row: [0]
+Right row: [0]
+Bottom row: [0]
+Left row: [4]
