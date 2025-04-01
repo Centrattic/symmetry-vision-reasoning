@@ -12,6 +12,7 @@ https://openaccess.thecvf.com/content/CVPR2024/html/Ganz_Question_Aware_Vision_T
 https://arxiv.org/abs/2403.11401
 https://ojs.aaai.org/index.php/AAAI/article/view/27888
 https://arxiv.org/abs/2501.00070
+https://arxiv.org/abs/2402.11574 (Super relevant! In-context learning of visual reps in VLMs)
 
 
 
