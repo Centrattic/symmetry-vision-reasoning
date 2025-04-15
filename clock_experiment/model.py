@@ -3,6 +3,7 @@ import torch.nn as nn
 from PIL import Image
 from torch.utils.data import Dataset
 
+from data import text_to_indices
 
 
 class ClockVLMDataset(Dataset):
@@ -40,95 +41,118 @@ class ClockVLMDataset(Dataset):
 # 4. Vision-Language Model Definition
 ###############################
 
-class SimpleVLM(nn.Module):
-    def __init__(self, vocab_size, embed_dim, text_hidden_dim, num_classes):
+class SimpleVLMSeq2Seq(nn.Module):
+    def __init__(self, input_vocab_size, embed_dim, text_hidden_dim, output_vocab_size, output_seq_len=5):
         """
-        A simple Vision-Language Model that fuses image and text features.
+        A small vision-language model that fuses image and text prompt features
+        and then decodes a fixed-length output sequence representing the time (hh:mm).
         
         Args:
-            vocab_size (int): Size of the vocabulary.
-            embed_dim (int): Dimensionality for word embeddings.
-            text_hidden_dim (int): Hidden size for the LSTM text encoder.
-            num_classes (int): Number of output classes.
+          input_vocab_size: Size of the input (prompt) vocabulary.
+          embed_dim: Dimensionality of input word embeddings.
+          text_hidden_dim: Hidden dimension for the prompt LSTM encoder.
+          output_vocab_size: Size of the output (target) vocabulary (e.g., 11 for digits+colon).
+          output_seq_len: Fixed length of the output sequence (5 for "hh:mm").
         """
-        super(SimpleVLM, self).__init__()
-        # Image branch: a small CNN encoder.
+        super(SimpleVLMSeq2Seq, self).__init__()
+        # Image branch: a small CNN.
         self.img_encoder = nn.Sequential(
             nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1),  # [B, 16, 128, 128]
             nn.ReLU(),
-            nn.MaxPool2d(2),                                       # [B, 16, 64, 64]
+            nn.MaxPool2d(2),  # [B, 16, 64, 64]
             nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=1),  # [B, 32, 64, 64]
             nn.ReLU(),
-            nn.MaxPool2d(2),                                       # [B, 32, 32, 32]
+            nn.MaxPool2d(2),  # [B, 32, 32, 32]
             nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),  # [B, 64, 32, 32]
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1,1))                              # [B, 64, 1, 1]
+            nn.AdaptiveAvgPool2d((1,1))  # [B, 64, 1, 1]
         )
-        self.img_fc = nn.Linear(64, 128)  # Map image features to 128 dimensions
+        self.img_fc = nn.Linear(64, 128)  # Map image features to 128 dims.
         
-        # Text branch: an embedding layer followed by an LSTM.
-        self.embedding = nn.Embedding(vocab_size, embed_dim)
+        # Text branch: embedding + LSTM to encode the prompt.
+        self.embedding = nn.Embedding(input_vocab_size, embed_dim)
         self.lstm = nn.LSTM(embed_dim, text_hidden_dim, batch_first=True)
-        # We assume text_hidden_dim is 128 (or you can adjust fusion accordingly).
+        # After the LSTM, we take the final hidden state.
         
-        # Fusion: Concatenate image and text features and run through a classifier.
-        self.classifier = nn.Sequential(
-            nn.Linear(128 + text_hidden_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, num_classes)
-        )
-    
+        # Fusion of image and prompt features.
+        # Fused vector dimension = 128 + text_hidden_dim.
+        fused_dim = 128 + text_hidden_dim
+        
+        # Decoder head: outputs logits for each token in the output sequence.
+        # We use a single linear layer that maps the fused vector to:
+        # (output_seq_len * output_vocab_size) logits.
+        self.decoder = nn.Linear(fused_dim, output_seq_len * output_vocab_size)
+        self.output_seq_len = output_seq_len
+        self.output_vocab_size = output_vocab_size
+        
     def forward(self, img, text):
-        # Process image.
-        x_img = self.img_encoder(img)          # shape: (B, 64, 1, 1)
-        x_img = x_img.view(x_img.size(0), -1)    # shape: (B, 64)
-        x_img = self.img_fc(x_img)               # shape: (B, 128)
+        # Process the image.
+        x_img = self.img_encoder(img)           # Shape: (B, 64, 1, 1)
+        x_img = x_img.view(x_img.size(0), -1)     # Shape: (B, 64)
+        x_img = self.img_fc(x_img)                # Shape: (B, 128)
         
-        # Process text.
-        # 'text' is expected to be of shape (B, L) where L is the sequence length.
-        x_text = self.embedding(text)            # shape: (B, L, embed_dim)
-        lstm_out, (h_n, c_n) = self.lstm(x_text)   # h_n shape: (num_layers, B, text_hidden_dim)
-        x_text = h_n[-1]                         # use the final hidden state, shape: (B, text_hidden_dim)
+        # Process the text prompt.
+        x_text = self.embedding(text)             # Shape: (B, L, embed_dim)
+        _, (h_n, _) = self.lstm(x_text)           # h_n: (num_layers, B, text_hidden_dim)
+        x_text = h_n[-1]                         # Shape: (B, text_hidden_dim)
         
-        # Fuse image and text features.
-        fused = torch.cat((x_img, x_text), dim=1)  # shape: (B, 128 + text_hidden_dim)
-        out = self.classifier(fused)
+        # Fuse features.
+        fused = torch.cat((x_img, x_text), dim=1)  # Shape: (B, 128 + text_hidden_dim)
+        
+        # Decode the output sequence in one shot.
+        out = self.decoder(fused)  # Shape: (B, output_seq_len * output_vocab_size)
+        out = out.view(-1, self.output_seq_len, self.output_vocab_size)
+        # Out shape: (B, seq_len, vocab_size)
         return out
 
-###############################
+############################################
 # 5. Training and Evaluation Functions
-###############################
+############################################
 
-def train_model(model, train_loader, criterion, optimizer, device):
+def train_model(model, train_loader, criterion, optimizer, device, output_vocab_size):
     model.train()
     running_loss = 0.0
-    for images, texts, labels in train_loader:
+    for images, texts, target_seqs in train_loader:
         images = images.to(device)
         texts = texts.to(device)
-        labels = labels.to(device)
+        target_seqs = target_seqs.to(device)  # Shape: (B, seq_len)
         
         optimizer.zero_grad()
-        outputs = model(images, texts)
-        loss = criterion(outputs, labels)
+        outputs = model(images, texts)  # Shape: (B, seq_len, vocab_size)
+        # Flatten outputs and targets for cross-entropy:
+        loss = criterion(outputs.view(-1, output_vocab_size), target_seqs.view(-1))
         loss.backward()
         optimizer.step()
-        
         running_loss += loss.item() * images.size(0)
     epoch_loss = running_loss / len(train_loader.dataset)
     return epoch_loss
 
-def evaluate_model(model, test_loader, device):
+def evaluate_model(model, test_loader, device, output_vocab, output_seq_len):
     model.eval()
-    correct = 0
-    total = 0
+    correct_tokens = 0
+    total_tokens = 0
+    outputs_list = []
+    
+    # Inference: convert predictions to strings.
+    inv_out_vocab = {v: k for k, v in output_vocab.items()}
+    
     with torch.no_grad():
-        for images, texts, labels in test_loader:
+        for images, texts, target_seqs in test_loader:
             images = images.to(device)
             texts = texts.to(device)
-            labels = labels.to(device)
-            outputs = model(images, texts)
-            _, preds = torch.max(outputs, 1)
-            correct += (preds == labels).sum().item()
-            total += labels.size(0)
-    accuracy = correct / total
-    return accuracy
+            target_seqs = target_seqs.to(device)  # Shape: (B, seq_len)
+            outputs = model(images, texts)         # Shape: (B, seq_len, vocab_size)
+            # Get predicted token indices per time step.
+            preds = outputs.argmax(dim=2)          # Shape: (B, seq_len)
+            
+            # Compute token-level accuracy.
+            correct_tokens += (preds == target_seqs).sum().item()
+            total_tokens += target_seqs.numel()
+            
+            # Convert each predicted sequence to a string.
+            for seq in preds.cpu().numpy():
+                pred_str = "".join([inv_out_vocab[token] for token in seq])
+                outputs_list.append(pred_str)
+    
+    token_acc = correct_tokens / total_tokens
+    return token_acc, outputs_list

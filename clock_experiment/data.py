@@ -16,43 +16,42 @@ import torch
 
 def generate_clock_image(hour, minute, n=5, size=128):
     """
-    Generate a clock image with discrete positions.
+    Generate a synthetic clock image with n discrete positions.
     
-    Args:
-        hour (int): The hour-hand index (0 to n-1).
-        minute (int): The minute-hand index (0 to n-1). The minute value will be computed as minute*(60/n)
-        n (int): Number of discrete positions on the clock.
-        size (int): The size (width and height) to which the image is resized.
+    The clock image is drawn with matplotlib. The time is computed as:
+      - hour: as provided (0 to n-1)
+      - minute_value: computed as int(round(minute * (60/n)))
+      
+    The time string is formatted as hh:mm with leading zeros.
     
     Returns:
-        np.array: The generated RGB image as a numpy array.
-        str: The time label as a string formatted "H:MM".
+      np.array: the generated RGB image.
+      str: the corresponding time string (e.g., "02:30").
     """
-    # Create a figure with no frame.
     fig, ax = plt.subplots(figsize=(2,2))
     ax.set_xlim([-1.2, 1.2])
     ax.set_ylim([-1.2, 1.2])
     ax.axis('off')
     
-    # Draw the clock circle.
+    # Draw clock circle.
     circle = plt.Circle((0, 0), 1, fill=False, color='black', linewidth=2)
     ax.add_artist(circle)
     
     # Draw tick marks and number labels.
     for i in range(n):
-        # Compute the angle so that index 0 is at the top.
         angle = math.pi/2 - 2 * math.pi * i / n
         x = 0.85 * math.cos(angle)
         y = 0.85 * math.sin(angle)
-        ax.text(x, y, str(i+1), horizontalalignment='center', verticalalignment='center', fontsize=12)
+        ax.text(x, y, str(i), horizontalalignment='center',
+                verticalalignment='center', fontsize=12)
     
-    # Draw the hour hand (shorter)
+    # Draw hour hand (shorter).
     hour_angle = math.pi/2 - 2 * math.pi * hour / n
     hour_x = 0.5 * math.cos(hour_angle)
     hour_y = 0.5 * math.sin(hour_angle)
     ax.plot([0, hour_x], [0, hour_y], color='black', linewidth=4)
     
-    # Draw the minute hand (longer)
+    # Draw minute hand (longer).
     minute_angle = math.pi/2 - 2 * math.pi * minute / n
     min_x = 0.8 * math.cos(minute_angle)
     min_y = 0.8 * math.sin(minute_angle)
@@ -64,43 +63,39 @@ def generate_clock_image(hour, minute, n=5, size=128):
     plt.close(fig)
     buf.seek(0)
     
-    # Open the image with PIL and resize.
+    # Open with PIL and resize.
     img = Image.open(buf).convert('RGB')
     img = img.resize((size, size))
     
-    # Compute the time label.
     minute_value = int(round(minute * (60 / n)))
-    time_label = f"{hour+1}:{minute_value:02d}"
-    
-    return np.array(img), time_label
+    time_str = f"{hour:02d}:{minute_value:02d}"
+    return np.array(img), time_str
 
 def generate_dataset(n=5, size=128):
     """
-    Generate a dataset of clock images and their labels.
-    For each combination of hour (0 to n-1) and minute (0 to n-1), we generate an image.
+    Generate a dataset of clock images.
     
-    Args:
-        n (int): Number of discrete clock positions.
-        size (int): Image size (both height and width).
+    For every combination of hour (0 to n-1) and minute (0 to n-1) an image is generated.
     
     Returns:
-        images (list of np.array): Generated images.
-        labels (list of int): Each image's label as an integer (hour * n + minute).
-        time_strings (list of str): Human-readable time strings.
+      images: list of np.array images.
+      time_strings: list of corresponding time strings in the format hh:mm.
     """
     images = []
-    labels = []
     time_strings = []
     for hour in range(n):
         for minute in range(n):
             img, time_str = generate_clock_image(hour, minute, n=n, size=size)
             images.append(img)
-            label = hour * n + minute  # single integer label, e.g., for n=5 there are 25 classes
-            labels.append(label)
             time_strings.append(time_str)
-    return images, labels, time_strings
+    return images, time_strings
 
-
+def time_str_to_indices(time_str, out_vocab):
+    """
+    Convert a time string (e.g., "04:20") to a list of token indices using out_vocab.
+    Assumes that the time string always has length 5 (hh:mm).
+    """
+    return [out_vocab[char] for char in time_str]
 
 def tokenize(text):
     """Simple whitespace tokenizer and lowercase."""
@@ -116,32 +111,42 @@ def text_to_indices(text, vocab):
 ###############################
 
 class ClockVLMDataset(Dataset):
-    def __init__(self, images, labels, prompt, vocab, transform=None):
+    def __init__(self, images, time_strings, prompt, input_vocab, target_vocab, transform=None):
         """
-        A PyTorch Dataset for clock images with a fixed text prompt.
-        
+        Dataset returns:
+          image, input prompt tokens, and target output sequence tokens.
+          
         Args:
-            images (list of np.array): List of generated clock images.
-            labels (list of int): Integer label for each image.
-            prompt (str): The text prompt (e.g., "Tell me the time on the clock").
-            vocab (dict): A dictionary mapping tokens to indices.
-            transform: Optional torchvision transforms.
+          images: list of np.array images.
+          time_strings: list of time strings (target labels), each of length 5 (hh:mm).
+          prompt: a fixed text prompt (e.g., "Tell me the time on the clock in hh:mm format").
+          input_vocab: vocabulary for tokenizing the prompt.
+          target_vocab: vocabulary for converting the time string to indices.
+          transform: image transformation (e.g., converting to Tensor).
         """
         self.images = images
-        self.labels = labels
+        self.time_strings = time_strings
         self.prompt = prompt
-        self.vocab = vocab
+        self.input_vocab = input_vocab
+        self.target_vocab = target_vocab
         self.transform = transform
-        # Precompute text indices from the prompt (same for every sample).
-        self.text_indices = torch.tensor(text_to_indices(prompt, vocab), dtype=torch.long)
+        # Precompute prompt token indices.
+        self.prompt_indices = torch.tensor(self.text_to_indices(prompt, input_vocab), dtype=torch.long)
+        # Precompute target sequences (each a list of 5 token indices).
+        self.target_seqs = [torch.tensor(time_str_to_indices(ts, target_vocab), dtype=torch.long) 
+                            for ts in self.time_strings]
+    
+    def text_to_indices(self, text, vocab):
+        # Simple whitespace tokenizer.
+        tokens = text.lower().split()
+        return [vocab[token] for token in tokens if token in vocab]
     
     def __len__(self):
         return len(self.images)
     
     def __getitem__(self, idx):
         image = Image.fromarray(self.images[idx])
-        label = self.labels[idx]
+        target_seq = self.target_seqs[idx]
         if self.transform:
             image = self.transform(image)
-        # Return image, text, and label. The text is the same for each sample.
-        return image, self.text_indices, label
+        return image, self.prompt_indices, target_seq
