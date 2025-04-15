@@ -23,3 +23,7 @@ In this experiment, we trained a toy VLM to learn to tell time from a clock. The
 
 The clock has 10 hour denominations of 6 minutes each, and the model is trained with an 80/20 split on the 100 images in the dataset. Performing dimensionality reduction after the vision encoder layer (before the input text has been processed), we find the model clusters clocks by both hour and minute. Each of the ten different minute endings are in vague clusters of their own, and within these, we have mini clusters of 4 with two clocks of hour x and two clocks of hour x+5.
 
+Also interesting to see there is certainly an imbalance in how much various features are represented...
+
+![plot](./clock_experiment/rep.png)
+
