@@ -11,10 +11,8 @@ import matplotlib.pyplot as plt
 from PIL import Image
 from torch.utils.data import Dataset
 
+import torch
 
-###############################
-# 1. Data Generation
-###############################
 
 def generate_clock_image(hour, minute, n=5, size=128):
     """
@@ -46,7 +44,7 @@ def generate_clock_image(hour, minute, n=5, size=128):
         angle = math.pi/2 - 2 * math.pi * i / n
         x = 0.85 * math.cos(angle)
         y = 0.85 * math.sin(angle)
-        ax.text(x, y, str(i), horizontalalignment='center', verticalalignment='center', fontsize=12)
+        ax.text(x, y, str(i+1), horizontalalignment='center', verticalalignment='center', fontsize=12)
     
     # Draw the hour hand (shorter)
     hour_angle = math.pi/2 - 2 * math.pi * hour / n
@@ -71,10 +69,8 @@ def generate_clock_image(hour, minute, n=5, size=128):
     img = img.resize((size, size))
     
     # Compute the time label.
-    # The minute value is computed by splitting the hour into n equal parts.
     minute_value = int(round(minute * (60 / n)))
-    # Format minute to be two digits.
-    time_label = f"{hour}:{minute_value:02d}"
+    time_label = f"{hour+1}:{minute_value:02d}"
     
     return np.array(img), time_label
 
@@ -88,9 +84,9 @@ def generate_dataset(n=5, size=128):
         size (int): Image size (both height and width).
     
     Returns:
-        images (list of np.array): The list of generated images.
-        labels (list of int): The label for each image as an integer (hour * n + minute).
-        time_strings (list of str): The human-readable time string corresponding to each image.
+        images (list of np.array): Generated images.
+        labels (list of int): Each image's label as an integer (hour * n + minute).
+        time_strings (list of str): Human-readable time strings.
     """
     images = []
     labels = []
@@ -99,29 +95,45 @@ def generate_dataset(n=5, size=128):
         for minute in range(n):
             img, time_str = generate_clock_image(hour, minute, n=n, size=size)
             images.append(img)
-            # Use a single integer label: encode as hour * n + minute.
-            label = hour * n + minute
+            label = hour * n + minute  # single integer label, e.g., for n=5 there are 25 classes
             labels.append(label)
             time_strings.append(time_str)
     return images, labels, time_strings
 
+
+
+def tokenize(text):
+    """Simple whitespace tokenizer and lowercase."""
+    return text.lower().split()
+
+def text_to_indices(text, vocab):
+    """Convert a text string to a list of token indices based on the provided vocab."""
+    tokens = tokenize(text)
+    return [vocab[token] for token in tokens]
+
 ###############################
-# 2. Dataset Class for PyTorch
+# 3. Vision-Language Dataset Class
 ###############################
 
-class ClockDataset(Dataset):
-    def __init__(self, images, labels, transform=None):
+class ClockVLMDataset(Dataset):
+    def __init__(self, images, labels, prompt, vocab, transform=None):
         """
-        A simple PyTorch Dataset wrapping clock images.
+        A PyTorch Dataset for clock images with a fixed text prompt.
         
         Args:
-            images (list of np.array): List of images.
-            labels (list of int): Corresponding integer labels.
-            transform: Optional torchvision transforms to apply.
+            images (list of np.array): List of generated clock images.
+            labels (list of int): Integer label for each image.
+            prompt (str): The text prompt (e.g., "Tell me the time on the clock").
+            vocab (dict): A dictionary mapping tokens to indices.
+            transform: Optional torchvision transforms.
         """
         self.images = images
         self.labels = labels
+        self.prompt = prompt
+        self.vocab = vocab
         self.transform = transform
+        # Precompute text indices from the prompt (same for every sample).
+        self.text_indices = torch.tensor(text_to_indices(prompt, vocab), dtype=torch.long)
     
     def __len__(self):
         return len(self.images)
@@ -131,4 +143,5 @@ class ClockDataset(Dataset):
         label = self.labels[idx]
         if self.transform:
             image = self.transform(image)
-        return image, label
+        # Return image, text, and label. The text is the same for each sample.
+        return image, self.text_indices, label
